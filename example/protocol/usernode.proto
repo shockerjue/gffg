@@ -1,0 +1,38 @@
+syntax = "proto3";
+package protocol;
+
+message Authorize {
+    string              appid = 1;
+    string              appkey = 2;
+    map<string,string>  extra = 3;
+}
+
+message CreateUserReq {
+    Authorize   auth            = 1;
+    string      username        = 2;
+    string      telephone       = 3;
+    string      email           = 4;
+}
+
+message CreateUserResp {
+    int32   Code                = 1;
+    string  msg                 = 2;
+    map<string,string> extra    = 3;
+}
+
+message UserInfoReq {
+    Authorize   auth          = 1;
+    string      username      = 2;
+}
+
+message UserInfoResp {
+    int32   Code                = 1;
+    string  msg                 = 2;
+    map<string,string> extra    = 3;
+}
+
+
+service UserService {
+    rpc  CreateUser(CreateUserReq) returns (CreateUserResp) {}
+    rpc  UserInfo(UserInfoReq) returns (UserInfoResp) {}
+}

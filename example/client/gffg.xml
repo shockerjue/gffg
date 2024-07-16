@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gffg>
+    <!-- log config -->
+    <log>
+        <!-- debug,info,warn,error,dpanic,panic,fatal -->
+        <level>debug</level>
+        <!-- Storage path. If not configured, it will be output to the console. -->
+        <log_file>./logs/log-client.log</log_file>
+    </log>
+    <!-- metrics config -->
+    <metrics>
+        <topic>metrics_basesvr</topic>
+        <group></group>
+        <brokers>127.0.0.1:9092,127.0.0.1:9092</brokers>
+    </metrics>
+    <client>
+        <group>basesvr</group>
+        <token>08f31c0181f43768a92c3fc19da5c72d08f31c0181f43768a92c3fc19da5c72d</token>
+    </client>
+    <server>
+        <name>gffg-test</name>
+    </server>
+
+    <!-- Service Management Center Configuration -->
+    <polaris>
+        <open>true</open>
+        <addrs>127.0.0.1:8091,127.0.0.1:8091</addrs>
+        <reporter>
+            <enable>true</enable>
+            <prometheus>
+                <type>push</type>
+                <address>127.0.0.1:9091</address>
+                <!-- s -->
+                <interval>10</interval>
+            </prometheus>
+        </reporter>
+    </polaris>
+</gffg>

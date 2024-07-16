@@ -1,0 +1,57 @@
+syntax = "proto3";
+package proto;
+
+message Request {
+    int64               sid             = 1;
+    int64               rpcId           = 2;
+    map<string,string>  headers         = 3; // Request header
+    bytes               packet          = 4;
+}
+
+message Response {
+    int64               sid             = 1;
+    map<string,string>  headers         = 2; // Rpc Request header
+    int32               code            = 3; // Rpc return code
+    bytes               packet          = 4;
+}
+
+message Counter {
+    string              method = 1;
+    string              code = 2;
+    map<string,string>  extra = 3;
+}
+
+message Gauge {
+    string              type = 1;
+    string              value = 2;
+    int64               add = 3;
+    bool                inc = 4;
+    map<string,string>  extra = 5;
+}
+
+message Summary {
+    string              method = 1;
+    map<string,string>  extra = 2;
+}
+
+enum MetricType {
+    CounterType = 0x00;
+    GaugeType = 0x01;
+    SummaryType = 0x02;
+}
+
+// Report monitoring data to the metricsvr service
+message Metric {
+    MetricType          type = 1;
+    Counter             counter = 2;
+    Gauge               gauge = 3;
+    Summary             summary = 4;
+    string              host = 5;
+    int64               micro = 6;
+    string              svrname = 7;
+    map<string,string>  extra = 8;
+}
+
+message Metrics {
+    repeated Metric     lists = 1;
+}

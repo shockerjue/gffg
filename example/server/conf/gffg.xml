@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gffg>
+    <!-- log config -->
+    <log>
+        <!-- debug,info,warn,error,dpanic,panic,fatal -->
+        <level>debug</level>
+        <!-- Storage path. If not configured, it will be output to the console. -->
+        <log_file>./logs/log-service.log</log_file>
+    </log>
+    <!-- Kafka configuration for push monitoring -->
+    <metrics>
+        <topic>metrics_basesvr</topic>
+        <group></group>
+        <brokers>127.0.0.1:9092,127.0.0.1:9092</brokers>
+    </metrics>
+    <!-- Service Management Center Configuration -->
+    <polaris>
+        <addrs>127.0.0.1:8091,127.0.0.1:8091</addrs>
+        <reporter>
+            <enable>1</enable>
+            <prometheus>
+                <type>push</type>
+                <address>127.0.0.1:9091</address>
+                <!-- s -->
+                <interval>10</interval>
+            </prometheus>
+        </reporter>
+    </polaris>
+
+    <!-- Server config -->
+    <!-- Provision of external services and configuration of registration with the service management center -->
+    <server>
+        <group>basesvr</group>
+        <name>gffg-test</name>
+        <version>v0.0.1</version>
+        <coroutines>32</coroutines>
+        <channels>100000</channels>
+        <token>08f31c0181f43768a92c3fc19da5c72d08f31c0181f43768a92c3fc19da5c72d</token>
+        <location>
+            <region>South China</region>
+            <zone>Guangzhou</zone>
+            <campus>Knowledge City</campus>
+        </location>
+    </server>
+</gffg>
