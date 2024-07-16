@@ -7,7 +7,7 @@ Install protoc-gen-gofast,protoc-gen-micro,protoco。
 
 ```
 go install ~/go/pkg/mod/github.com/gogo/protobuf@v1.3.2/protoc-gen-gofast/main.go
-go install github.com/shockerjue/protoc-gen-micro@v0.1.2
+go install github.com/shockerjue/protoc-gen-micro@v0.1.3
 ```
 
 Also required:
