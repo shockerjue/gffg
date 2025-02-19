@@ -29,8 +29,15 @@ type IRegistry interface {
 
 ## Service Monitoring
 Use grafana to monitor the framework service nodes and track the status. Report monitoring information by Kafka.
-``` docker run
+``` docker run - admin:admin
 docker run -d --name=grafana -p 3000:3000 grafana/grafana-enterprise
+```
+<br><br>
+
+## Kafka 
+Kafka is used for monitoring and reporting related
+``` kafka run 
+docker run -d -p 9092:9092 --name broker apache/kafka:latest
 ```
 <br><br>
 
