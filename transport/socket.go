@@ -2,6 +2,8 @@ package transport
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"time"
@@ -91,7 +93,16 @@ func (s *Socket) onRecv(headerByteSize int, maxMessageSize int,
 	dataBuffer := make([]byte, maxMessageSize)
 	defer func() {
 		if err := recover(); nil != err {
-			zzlog.Errorw("onRecv except", zap.Error(err.(error)))
+			var logErr error
+			switch v := err.(type) {
+			case error:
+				logErr = v
+			case string:
+				logErr = errors.New(v)
+			default:
+				logErr = fmt.Errorf("panic recovered: %v", v)
+			}
+			zzlog.Errorw("onRecv except", zap.Error(logErr))
 		}
 
 		if nil != s.conn {

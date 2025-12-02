@@ -1017,7 +1017,7 @@ func (m *Authorize) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if (skippy < 0) || (iNdEx+skippy) < 0 {
+					if skippy < 0 {
 						return ErrInvalidLengthUsernode
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -1034,7 +1034,10 @@ func (m *Authorize) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthUsernode
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthUsernode
 			}
 			if (iNdEx + skippy) > l {
@@ -1217,7 +1220,10 @@ func (m *CreateUserReq) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthUsernode
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthUsernode
 			}
 			if (iNdEx + skippy) > l {
@@ -1429,7 +1435,7 @@ func (m *CreateUserResp) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if (skippy < 0) || (iNdEx+skippy) < 0 {
+					if skippy < 0 {
 						return ErrInvalidLengthUsernode
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -1446,7 +1452,10 @@ func (m *CreateUserResp) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthUsernode
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthUsernode
 			}
 			if (iNdEx + skippy) > l {
@@ -1565,7 +1574,10 @@ func (m *UserInfoReq) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthUsernode
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthUsernode
 			}
 			if (iNdEx + skippy) > l {
@@ -1777,7 +1789,7 @@ func (m *UserInfoResp) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if (skippy < 0) || (iNdEx+skippy) < 0 {
+					if skippy < 0 {
 						return ErrInvalidLengthUsernode
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -1794,7 +1806,10 @@ func (m *UserInfoResp) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if (skippy < 0) || (iNdEx+skippy) < 0 {
+			if skippy < 0 {
+				return ErrInvalidLengthUsernode
+			}
+			if (iNdEx + skippy) < 0 {
 				return ErrInvalidLengthUsernode
 			}
 			if (iNdEx + skippy) > l {

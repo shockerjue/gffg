@@ -16,11 +16,33 @@ var (
 	Host    = ""
 	MaxCh   = 10000
 	MaxPush = 1000
+
+	// Internal metrics for monitoring the metrics system itself
+	metricsDropped = &counter{}
 )
 
+type counter struct {
+	sync.RWMutex
+	value int64
+}
+
+func (c *counter) Inc() {
+	c.Lock()
+	defer c.Unlock()
+	c.value++
+}
+
+func (c *counter) Get() int64 {
+	c.RLock()
+	defer c.RUnlock()
+	return c.value
+}
+
 type metrics struct {
-	pub *kafka.Product
-	mCh chan *proto.Metric
+	pub    *kafka.Product
+	mCh    chan *proto.Metric
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 var _m *metrics
@@ -28,18 +50,44 @@ var once sync.Once
 
 func obj() *metrics {
 	once.Do(func() {
+		ctx, cancel := context.WithCancel(context.Background())
 		_m = &metrics{
 			pub: kafka.NewProduct(
 				kafka.Brokers(config.Get("metrics", "brokers").String("")),
 				kafka.Group(config.Get("metrics", "group").String("")),
 				kafka.Topic(config.Get("metrics", "topic").String(""))),
-			mCh: make(chan *proto.Metric, MaxCh),
+			mCh:    make(chan *proto.Metric, MaxCh),
+			ctx:    ctx,
+			cancel: cancel,
 		}
 
 		go _m.loop()
+
+		// Start background goroutine to monitor metrics system health
+		go _m.monitor()
 	})
 
 	return _m
+}
+
+func (m *metrics) monitor() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			dropped := metricsDropped.Get()
+			if dropped > 0 {
+				zzlog.Warnw("metrics system health check",
+					zap.Int64("metrics_dropped", dropped),
+					zap.Int("channel_size", len(m.mCh)),
+					zap.Int("channel_capacity", MaxCh))
+			}
+		}
+	}
 }
 
 func (m *metrics) combine(its []*proto.Metric) {
@@ -63,59 +111,97 @@ func (m *metrics) combine(its []*proto.Metric) {
 
 func (m *metrics) loop() {
 	timer := time.NewTicker(200 * time.Millisecond)
+	batchSize := 1000 // Pre-allocate reasonable batch size
 
 	for {
-		lists := make([]*proto.Metric, 0)
-		for {
-			select {
-			case it := <-m.mCh:
-				lists = append(lists, it)
+		lists := make([]*proto.Metric, 0, batchSize)
 
-			case <-timer.C:
-				goto to
+		// Wait for first metric or timer
+		select {
+		case it := <-m.mCh:
+			lists = append(lists, it)
+
+			// Try to collect more metrics without blocking
+			for len(lists) < batchSize {
+				select {
+				case it := <-m.mCh:
+					lists = append(lists, it)
+				default:
+					// No more metrics available
+					goto process
+				}
 			}
+
+		case <-timer.C:
+			// Timer expired, process any collected metrics
 		}
 
-	to:
-		m.combine(lists)
+	process:
+		if len(lists) > 0 {
+			m.combine(lists)
+		}
+
+		// Reset timer for next batch
+		<-timer.C
 	}
 }
 
 func (m *metrics) report(it *proto.Metrics) {
-	if nil == it {
+	if nil == it || len(it.Lists) == 0 {
 		return
 	}
 
 	startAt := time.Now().UnixMilli()
 	buffer, err := it.Marshal()
 	if nil != err {
-		zzlog.Errorw("metrics.send msg.Marshal error", zap.Error(err),
-			zap.Any("cost", time.Now().UnixMilli()-startAt), zap.Any("mCh", len(m.mCh)))
+		// Use Error level only for critical errors
+		zzlog.Warnw("metrics.send msg.Marshal error", zap.Error(err),
+			zap.Any("cost", time.Now().UnixMilli()-startAt), zap.Any("mCh", len(m.mCh)),
+			zap.Int("batch_size", len(it.Lists)))
 
 		return
 	}
 
 	err = m.pub.Product(context.TODO(), buffer)
 	if nil != err {
-		zzlog.Errorw("metrics.send Product error", zap.Error(err),
-			zap.Any("cost", time.Now().UnixMilli()-startAt), zap.Any("mCh", len(m.mCh)))
+		zzlog.Warnw("metrics.send Product error", zap.Error(err),
+			zap.Any("cost", time.Now().UnixMilli()-startAt), zap.Any("mCh", len(m.mCh)),
+			zap.Int("batch_size", len(it.Lists)))
 
 		return
 	}
 
-	zzlog.Debugw("metrics.send success", zap.Any("buffer.size", len(buffer)),
-		zap.Any("cost", time.Now().UnixMilli()-startAt), zap.Any("mCh", len(m.mCh)))
+	// Only log debug info if enabled
+	if zzlog.IsDebugEnabled() {
+		zzlog.Debugw("metrics.send success", zap.Any("buffer.size", len(buffer)),
+			zap.Any("cost", time.Now().UnixMilli()-startAt), zap.Any("mCh", len(m.mCh)),
+			zap.Int("batch_size", len(it.Lists)))
+	}
 	return
 }
 
 func (m *metrics) to(it *proto.Metric) {
 	if (MaxCh - 10) < len(m.mCh) {
-		zzlog.Warnw("metrics.to channel is fully", zap.Any("mCh", len(m.mCh)))
+		// Only log warning occasionally to avoid log spam
+		if time.Now().Unix()%10 == 0 { // Log once every 10 seconds
+			zzlog.Warnw("metrics.to channel is fully", zap.Any("mCh", len(m.mCh)))
+		}
 
+		// Drop metric instead of blocking
+		metricsDropped.Inc()
 		return
 	}
 
-	m.mCh <- it
+	select {
+	case m.mCh <- it:
+		// Successfully sent
+	default:
+		// Channel is full, drop the metric
+		metricsDropped.Inc()
+		if time.Now().Unix()%10 == 0 {
+			zzlog.Warnw("metrics.to channel full, dropping metric", zap.Any("mCh", len(m.mCh)))
+		}
+	}
 	return
 }
 

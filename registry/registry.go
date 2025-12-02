@@ -96,7 +96,6 @@ func (r *registry) Register(addr string, protocl string) {
 
 		return
 	}
-
 	r.addr = addr
 	registerRequest := &polaris.InstanceRegisterRequest{}
 	registerRequest.Service = r.n.opts.name

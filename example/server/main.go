@@ -9,7 +9,6 @@ import (
 	"github.com/shockerjue/gffg/example/server/controller"
 
 	"github.com/shockerjue/gffg/server"
-	"github.com/shockerjue/gffg/tools"
 )
 
 func main() {
@@ -25,7 +24,7 @@ func main() {
 	svr.Run(server.Bind("0.0.0.0"), server.Port(0))
 
 	// Enable performance detection service
-	tools.PProf()
+	// tools.PProf()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

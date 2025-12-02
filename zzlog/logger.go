@@ -3,6 +3,8 @@ package zzlog
 import (
 	"io"
 	"os"
+	"sync"
+	"sync/atomic"
 
 	"github.com/polarismesh/polaris-go/api"
 	"go.uber.org/zap"
@@ -12,6 +14,8 @@ import (
 
 var (
 	defLogger *zap.SugaredLogger
+	debugMode int32 = 0 // 0 = unknown, 1 = enabled, -1 = disabled
+	debugOnce sync.Once
 )
 
 func init() {
@@ -36,6 +40,15 @@ func Init(opts ...LoggerOption) {
 	if nil != err {
 		level = zapcore.InfoLevel
 	}
+
+	// Update debug mode based on configured level
+	debugOnce.Do(func() {
+		if level <= zapcore.DebugLevel {
+			atomic.StoreInt32(&debugMode, 1)
+		} else {
+			atomic.StoreInt32(&debugMode, -1)
+		}
+	})
 
 	jacklog := &lumberjack.Logger{
 		Filename:   opt.logName,
@@ -143,6 +156,21 @@ func Infow(msg string, keysAndValues ...interface{}) {
 
 func Panic(args ...interface{}) {
 	defLogger.Panic(args...)
+}
+
+// IsDebugEnabled returns true if debug logging is enabled
+func IsDebugEnabled() bool {
+	mode := atomic.LoadInt32(&debugMode)
+	if mode == 0 {
+		// Check current logger level
+		if defLogger != nil {
+			// Try to determine if debug is enabled
+			// This is a heuristic since zap doesn't expose level directly
+			return false
+		}
+		return false
+	}
+	return mode == 1
 }
 
 func Panicf(template string, args ...interface{}) {

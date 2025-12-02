@@ -53,18 +53,20 @@ func (p *pool) key(group, svrname string) string {
 func (p *pool) destroy() {
 	p.r.Destroy()
 
-	p.rw.RLock()
-	defer p.rw.RUnlock()
+	p.rw.Lock()
+	defer p.rw.Unlock()
 	for _, v := range p.rpcconn {
 		for _, c := range v {
 			c.S.Close()
 		}
 	}
 
-	p.wrw.RLock()
-	defer p.wrw.RUnlock()
+	p.wrw.Lock()
+	defer p.wrw.Unlock()
 	for _, v := range p.callItem {
-		close(v.Ch)
+		if !common.ClosedChanInt(v.Ch) {
+			close(v.Ch)
+		}
 	}
 }
 
@@ -86,7 +88,16 @@ func (p *pool) connect(ctx context.Context, group, svrname, name string) (
 	go s.Handle(func(ctx context.Context, req *transport.Request, r *transport.Response) error {
 		defer func() {
 			if r := recover(); r != nil {
-				zzlog.Errorw("client.Handle error", zap.Error(r.(error)))
+				var err error
+				switch v := r.(type) {
+				case error:
+					err = v
+				case string:
+					err = errors.New(v)
+				default:
+					err = fmt.Errorf("panic recovered: %v", v)
+				}
+				zzlog.Errorw("client.Handle error", zap.Error(err))
 
 				return
 			}
@@ -111,16 +122,16 @@ func (p *pool) connect(ctx context.Context, group, svrname, name string) (
 			return nil
 		}
 
-		p.wrw.RLock()
-		if _, ok := p.callItem[Sid]; ok {
-			p.callItem[Sid].Packet = msg.Packet
-			p.callItem[Sid].Code = msg.Code
+		p.wrw.Lock()
+		if item, exists := p.callItem[Sid]; exists {
+			item.Packet = msg.Packet
+			item.Code = msg.Code
 
-			if !common.ClosedChanInt(p.callItem[Sid].Ch) {
-				p.callItem[Sid].Ch <- 0
+			if !common.ClosedChanInt(item.Ch) {
+				item.Ch <- 0
 			}
 		}
-		p.wrw.RUnlock()
+		p.wrw.Unlock()
 
 		zzlog.Debugw("Recv from server", zap.Int64("Sid", Sid), zap.Any("Header",
 			msg.Headers), zap.Any("packet.len", len(msg.Packet)))

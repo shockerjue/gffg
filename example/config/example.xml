@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gffg>
+    <!-- Server Configuration -->
+    <server>
+        <name>example-service</name>
+        <group>default</group>
+        <version>v1.0.0</version>
+        <token>your-service-token</token>
+
+        <!-- Server network configuration -->
+        <bind>0.0.0.0</bind>
+        <port>8080</port>
+
+        <!-- Performance tuning -->
+        <coroutines>32</coroutines>
+        <channels>10000</channels>
+
+        <!-- Location information for service discovery -->
+        <location>
+            <region>us-west-1</region>
+            <zone>zone-a</zone>
+            <campus>campus-1</campus>
+        </location>
+
+        <!-- Timeout settings -->
+        <timeout>
+            <read>30s</read>
+            <write>30s</write>
+            <idle>300s</idle>
+        </timeout>
+
+        <!-- Rate limiting -->
+        <rate_limit>
+            <enabled>true</enabled>
+            <global>1000</global>
+            <per_method>100</per_method>
+            <burst>200</burst>
+        </rate_limit>
+    </server>
+
+    <!-- Logging Configuration -->
+    <log>
+        <log_file>/var/log/gffg/example-service.log</log_file>
+        <level>info</level>
+        <max_size>100</max_size> <!-- MB -->
+        <max_backups>10</max_backups>
+        <max_age>30</max_age> <!-- days -->
+        <compress>true</compress>
+    </log>
+
+    <!-- Metrics Configuration -->
+    <metrics>
+        <enabled>true</enabled>
+        <brokers>localhost:9092</brokers>
+        <group>gffg-metrics</group>
+        <topic>gffg-metrics</topic>
+        <interval>1s</interval>
+        <batch_size>1000</batch_size>
+        <channel_size>10000</channel_size>
+    </metrics>
+
+    <!-- Registry Configuration (Polaris) -->
+    <registry>
+        <type>polaris</type>
+        <address>localhost:15010</address>
+        <namespace>default</namespace>
+        <timeout>5s</timeout>
+        <refresh_interval>30s</refresh_interval>
+
+        <!-- Health check configuration -->
+        <health_check>
+            <type>tcp</type>
+            <interval>10s</interval>
+            <timeout>5s</timeout>
+            <healthy_threshold>2</healthy_threshold>
+            <unhealthy_threshold>3</unhealthy_threshold>
+        </health_check>
+
+        <!-- Circuit breaker configuration -->
+        <circuit_breaker>
+            <enabled>true</enabled>
+            <error_threshold>50</error_threshold>
+            <request_threshold>10</request_threshold>
+            <sleep_window>30s</sleep_window>
+            <half_open_max_requests>1</half_open_max_requests>
+        </circuit_breaker>
+    </registry>
+
+    <!-- Client Configuration -->
+    <client>
+        <!-- Connection pool settings -->
+        <pool>
+            <size>8</size>
+            <idle_timeout>300s</idle_timeout>
+            <max_lifetime>1800s</max_lifetime>
+        </pool>
+
+        <!-- Retry configuration -->
+        <retry>
+            <max_attempts>3</max_attempts>
+            <initial_backoff>100ms</initial_backoff>
+            <max_backoff>1s</max_backoff>
+            <backoff_multiplier>2.0</backoff_multiplier>
+        </retry>
+
+        <!-- Load balancing strategy -->
+        <load_balancer>
+            <strategy>weighted_random</strategy>
+            <!-- Other strategies: round_robin, least_connections, consistent_hash -->
+        </load_balancer>
+
+        <!-- Timeout settings -->
+        <timeout>
+            <connect>5s</connect>
+            <read>30s</read>
+            <write>30s</write>
+            <call>60s</call>
+        </timeout>
+    </client>
+
+    <!-- Kafka Configuration (for metrics) -->
+    <kafka>
+        <brokers>localhost:9092</brokers>
+        <version>2.8.0</version>
+
+        <!-- Producer configuration -->
+        <producer>
+            <required_acks>1</required_acks>
+            <compression>snappy</compression>
+            <batch_size>16384</batch_size>
+            <linger_ms>5</linger_ms>
+            <buffer_memory>33554432</buffer_memory>
+        </producer>
+
+        <!-- Consumer configuration -->
+        <consumer>
+            <group_id>gffg-metrics-consumer</group_id>
+            <auto_offset_reset>latest</auto_offset_reset>
+            <session_timeout>30s</session_timeout>
+            <heartbeat_interval>3s</heartbeat_interval>
+            <max_poll_interval>5m</max_poll_interval>
+        </consumer>
+    </kafka>
+
+    <!-- Tracing Configuration -->
+    <tracing>
+        <enabled>true</enabled>
+        <sampler_type>probabilistic</sampler_type>
+        <sampler_param>0.1</sampler_param>
+        <reporter>
+            <type>jaeger</type>
+            <address>localhost:6831</address>
+            <flush_interval>1s</flush_interval>
+            <max_queue_size>10000</max_queue_size>
+        </reporter>
+    </tracing>
+
+    <!-- Security Configuration -->
+    <security>
+        <tls>
+            <enabled>false</enabled>
+            <cert_file>/path/to/cert.pem</cert_file>
+            <key_file>/path/to/key.pem</key_file>
+            <ca_file>/path/to/ca.pem</ca_file>
+        </tls>
+
+        <!-- Authentication -->
+        <auth>
+            <enabled>false</enabled>
+            <type>jwt</type>
+            <secret>your-jwt-secret</secret>
+            <expiry>24h</expiry>
+        </auth>
+    </security>
+
+    <!-- Monitoring Configuration -->
+    <monitoring>
+        <!-- Prometheus metrics endpoint -->
+        <prometheus>
+            <enabled>true</enabled>
+            <path>/metrics</path>
+            <port>9091</port>
+        </prometheus>
+
+        <!-- Health check endpoint -->
+        <health>
+            <enabled>true</enabled>
+            <path>/health</path>
+            <port>9092</port>
+        </health>
+
+        <!-- PProf endpoint -->
+        <pprof>
+            <enabled>true</enabled>
+            <path>/debug/pprof</path>
+            <port>7777</port>
+        </pprof>
+    </monitoring>
+</gffg>

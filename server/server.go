@@ -7,13 +7,16 @@ import (
 	"net"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/shockerjue/gffg/circuitbreaker"
 	"github.com/shockerjue/gffg/common"
 	"github.com/shockerjue/gffg/config"
 	"github.com/shockerjue/gffg/metrics"
 	"github.com/shockerjue/gffg/proto"
+	"github.com/shockerjue/gffg/ratelimit"
 	"github.com/shockerjue/gffg/registry"
 	"github.com/shockerjue/gffg/transport"
 	"github.com/shockerjue/gffg/zzlog"
@@ -40,7 +43,10 @@ type Server struct {
 	addrs      string
 	coroutines int
 
-	reqCh chan RequetChannel
+	reqCh          chan RequetChannel
+	rateLimiter    ratelimit.Limiter
+	circuitBreaker circuitbreaker.CircuitBreaker
+	rateLimitMgr   *ratelimit.Manager
 }
 
 func NewServer(conf_file string, opts ...ServerOption) *Server {
@@ -69,13 +75,29 @@ func NewServer(conf_file string, opts ...ServerOption) *Server {
 		registry.Campus(config.Get("server", "location", "campus").String(""))))
 
 	ctx, cFunc := context.WithCancel(context.Background())
-	return &Server{
+
+	server := &Server{
 		ctx:        ctx,
 		cancelFunc: cFunc,
 		registry:   opt.registry,
 		coroutines: config.Get("server", "coroutines").Int(32),
 		reqCh:      make(chan RequetChannel, config.Get("server", "channels").Int(10000)),
 	}
+
+	// Initialize rate limiter if enabled
+	if config.Get("server", "rate_limit", "enabled").Bool() {
+		server.initRateLimiter()
+	}
+
+	// Initialize circuit breaker if enabled
+	if config.Get("server", "circuit_breaker", "enabled").Bool() {
+		server.initCircuitBreaker()
+	}
+
+	// Initialize rate limit manager
+	server.initRateLimitManager()
+
+	return server
 }
 
 func (this *Server) incReq() int64 {
@@ -147,28 +169,68 @@ func (this *Server) handle(ctx context.Context, request *transport.Request, resp
 		if r := recover(); r != nil {
 			metrics.Counter("server", "panic")
 
-			zzlog.Errorw("Server.recv error", zap.String("traceId", traceId), zap.Error(r.(error)))
+			var err error
+			switch v := r.(type) {
+			case error:
+				err = v
+			case string:
+				err = errors.New(v)
+			default:
+				err = fmt.Errorf("panic recovered: %v", v)
+			}
+			zzlog.Errorw("Server.recv error", zap.String("traceId", traceId), zap.Error(err))
 		}
 	}()
 
 	msg := &proto.Request{}
 	err := msg.Unmarshal(request.Packet())
 	if nil != err {
-		return err
+		return common.ErrRPCUnmarshal(traceId, err)
 	}
 	traceId = msg.Headers["traceId"]
-	zzlog.Debugw("Server.handle Unmarshal", zap.String("cost",
-		fmt.Sprintf("%dms", time.Now().UnixMilli()-request.Stamp())))
+	if zzlog.IsDebugEnabled() {
+		zzlog.Debugw("Server.handle Unmarshal", zap.String("cost",
+			fmt.Sprintf("%dms", time.Now().UnixMilli()-request.Stamp())))
+	}
 
 	if _, ok := this.rpcHandler.calls[uint64(msg.GetRpcId())]; !ok {
-		return errors.New(fmt.Sprintf("RpcId called not register! rid:%d traceId:%s ", msg.GetRpcId(), traceId))
+		return common.ErrRPCNotRegistered(uint64(msg.GetRpcId()), traceId)
 	}
 
 	item := this.rpcHandler.calls[uint64(msg.GetRpcId())]
 	if nil == item || nil == item.Call {
 		metrics.Counter("server", "not.Call")
 
-		return errors.New(fmt.Sprintf("call func not exists! rid:%d	traceId:%s", msg.GetRpcId(), traceId))
+		return common.ErrRPCNotFound(uint64(msg.GetRpcId()), traceId)
+	}
+
+	// Apply rate limiting if enabled
+	if this.rateLimiter != nil {
+		allowed, rlErr := this.rateLimiter.Allow(ctx, item.Name)
+		if rlErr != nil {
+			zzlog.Warnw("rate limiter error", zap.String("method", item.Name), zap.Error(rlErr))
+		} else if !allowed {
+			res := &proto.Response{
+				Sid:     msg.Sid,
+				Headers: msg.Headers,
+				Code:    common.ErrCodeRateLimit,
+			}
+			this.reply(response, res)
+			return common.ErrRPCRateLimit(item.Name, traceId)
+		}
+	}
+
+	// Apply circuit breaker if enabled
+	if this.circuitBreaker != nil {
+		if !this.circuitBreaker.AllowRequest(ctx) {
+			res := &proto.Response{
+				Sid:     msg.Sid,
+				Headers: msg.Headers,
+				Code:    common.ErrCodeCallFailed,
+			}
+			this.reply(response, res)
+			return common.NewRPCError(503, "service unavailable due to circuit breaker", traceId)
+		}
 	}
 
 	reqCount := this.incReq()
@@ -182,42 +244,60 @@ func (this *Server) handle(ctx context.Context, request *transport.Request, resp
 
 	defer func() {
 		reqCount = this.decReq()
-		zzlog.Debugw("Recv from client",
-			zap.Int64("Sid", msg.Sid),
-			zap.String("method", item.Name),
-			zap.Int64("reqCount", reqCount),
-			zap.Int64("conns", this.conns),
-			zap.String("traceId", traceId),
-			zap.String("cost", fmt.Sprintf("%dms", time.Now().UnixMilli()-request.Stamp())))
+		cost := time.Now().UnixMilli() - request.Stamp()
+
+		// Only log debug info if enabled or if there's an error
+		if zzlog.IsDebugEnabled() || res.Code != 0 || cost > 1000 {
+			zzlog.Debugw("Recv from client",
+				zap.Int64("Sid", msg.Sid),
+				zap.String("method", item.Name),
+				zap.Int64("reqCount", reqCount),
+				zap.Int64("conns", this.conns),
+				zap.String("traceId", traceId),
+				zap.Int64("cost_ms", cost),
+				zap.Int32("response_code", res.Code))
+		}
 
 		metrics.MethodCode(item.Name, fmt.Sprintf("%d", res.Code))
 		metrics.CounterByAdd("server", "reqCount", reqCount)
 		metrics.Summary(item.Name, request.Stamp())
+
+		// Record result for circuit breaker
+		if this.circuitBreaker != nil {
+			if res.Code != 0 {
+				this.circuitBreaker.RecordFailure(fmt.Errorf("RPC failed with code %d", res.Code))
+			} else {
+				this.circuitBreaker.RecordSuccess()
+			}
+		}
 	}()
 
+	// Apply registry limiter (external service)
 	err = this.registry.Limiter(ctx, item.Name)
 	if nil != err {
-		res.Code = 405
+		res.Code = common.ErrCodeRateLimit
 		this.reply(response, res)
 
-		return errors.New(fmt.Sprintf("registry.Limiter error[%s]	traceId:%s", err.Error(), traceId))
+		return common.ErrRPCRateLimit(item.Name, traceId)
 	}
 
 	cctx := context.Background()
 	cctx = context.WithValue(cctx, "traceId", traceId)
 	ret, err := item.Call(cctx, msg.Packet)
 	if nil != err {
-		res.Code = 505
+		res.Code = common.ErrCodeCallFailed
 		this.reply(response, res)
 
-		return errors.New(fmt.Sprintf("recv.Call error[%s]	traceId:%s", err.Error(), traceId))
+		return common.ErrRPCCallFailed(item.Name, traceId, err)
 	}
 	res.Packet = ret
 
 	// only call return
 	if _, ok := msg.Headers["onlyCall"]; ok || 0 == msg.Sid {
-		zzlog.Debugw("Recv request from onlyCall", zap.String("traceId", traceId),
-			zap.Any("Sid", msg.Sid), zap.Any("method", item.Name))
+		if zzlog.IsDebugEnabled() {
+			zzlog.Debugw("Recv request from onlyCall", zap.String("traceId", traceId),
+				zap.Int64("Sid", msg.Sid), zap.String("method", item.Name))
+		}
 
 		return nil
 	}
@@ -236,9 +316,17 @@ func (s *Server) reply(response *transport.Response, packet *proto.Response) (er
 }
 
 func (this *Server) onRecv(ctx context.Context, req *transport.Request, res *transport.Response) error {
-	zzlog.Debugw("onRecv request from onlyCall, Will request push channel.")
+	if zzlog.IsDebugEnabled() {
+		zzlog.Debugw("onRecv request, pushing to channel.")
+	}
+
 	if (config.Get("server", "channels").Int(10000) - 10) < len(this.reqCh) {
-		zzlog.Errorw("onRecv request channel is fully, please wait.")
+		// Only log error occasionally to avoid log spam
+		if time.Now().Unix()%5 == 0 { // Log once every 5 seconds
+			zzlog.Errorw("onRecv request channel is fully, please wait.",
+				zap.Int("channel_size", len(this.reqCh)),
+				zap.Int("channel_capacity", config.Get("server", "channels").Int(10000)))
+		}
 		metrics.Counter("server", "channels_fully")
 
 		msg := &proto.Request{}
@@ -266,7 +354,9 @@ func (this *Server) onRecv(ctx context.Context, req *transport.Request, res *tra
 
 func (this *Server) goRecv() {
 	defer func() {
-		zzlog.Infow("Server.goRecv defer", zap.Any("reqCh.size", len(this.reqCh)))
+		if zzlog.IsDebugEnabled() {
+			zzlog.Debugw("Server.goRecv exiting", zap.Int("reqCh_size", len(this.reqCh)))
+		}
 	}()
 
 	for {
@@ -277,7 +367,12 @@ func (this *Server) goRecv() {
 		case req := <-this.reqCh:
 			err := this.handle(req.Ctx, req.Req, req.Res)
 			if nil != err {
-				zzlog.Errorw("Server.goRecv request handle error", zap.Any("ctx", req.Ctx), zap.Error(err.(error)))
+				// Log connection errors at warn level, other errors at error level
+				if strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "broken pipe") {
+					zzlog.Warnw("Server.goRecv connection error", zap.Error(err))
+				} else {
+					zzlog.Errorw("Server.goRecv request handle error", zap.Error(err))
+				}
 			}
 		}
 	}
@@ -298,16 +393,31 @@ func (s *Server) Release() {
 	if nil != s.cancelFunc {
 		s.cancelFunc()
 	}
+
+	// Close rate limiter if available
+	if s.rateLimiter != nil {
+		s.rateLimiter.Close()
+	}
+
+	// Close circuit breaker if available
+	if s.circuitBreaker != nil {
+		s.circuitBreaker.Close()
+	}
+
+	// Close rate limit manager if available
+	if s.rateLimitMgr != nil {
+		s.rateLimitMgr.Close()
+	}
 }
 
 func (s *Server) Run(opts ...HandlerOption) {
-	config := &options{
+	optsConfig := &options{
 		bind: "0.0.0.0",
 		port: 0,
 	}
 
 	for _, o := range opts {
-		o(config)
+		o(optsConfig)
 	}
 
 	event := transport.TransEvent{
@@ -319,7 +429,7 @@ func (s *Server) Run(opts ...HandlerOption) {
 	btl, err := transport.NewListener(
 		transport.MaxMessageSize(1<<20),
 		transport.EnableLogging(true),
-		transport.Address(buffstreams.FormatAddress(config.bind, strconv.Itoa(config.port))),
+		transport.Address(buffstreams.FormatAddress(optsConfig.bind, strconv.Itoa(optsConfig.port))),
 		transport.Event(event),
 		transport.Ctx(s.ctx),
 	)
@@ -340,8 +450,12 @@ func (s *Server) Run(opts ...HandlerOption) {
 	for i := 0; i < s.coroutines; i++ {
 		go s.goRecv()
 	}
+
+	// Start metrics collection for rate limiting and circuit breaking
+	go s.collectMetrics()
+
 	go func() {
-		timer := time.NewTicker(500 * time.Millisecond)
+		timer := time.NewTicker(5 * time.Second) // Reduced frequency from 500ms to 5s
 
 		for {
 			select {
@@ -351,7 +465,155 @@ func (s *Server) Run(opts ...HandlerOption) {
 			case <-timer.C:
 				metrics.CounterByAdd("server", "channels", int64(len(s.reqCh)))
 				metrics.CounterByAdd("server", "coroutines", int64(runtime.NumGoroutine()))
+
+				// Log channel status only if debug is enabled or if channel is nearly full
+				if zzlog.IsDebugEnabled() || len(s.reqCh) > config.Get("server", "channels").Int(10000)*8/10 {
+					zzlog.Debugw("Server status",
+						zap.Int("channel_size", len(s.reqCh)),
+						zap.Int("channel_capacity", config.Get("server", "channels").Int(10000)),
+						zap.Int("goroutines", runtime.NumGoroutine()))
+				}
 			}
 		}
 	}()
+}
+
+// initRateLimiter initializes the rate limiter for the server
+func (s *Server) initRateLimiter() {
+	rateLimitConfig := &ratelimit.Config{
+		DefaultLimit: ratelimit.Limit{
+			Rate:      float64(config.Get("server", "rate_limit", "global").Int(1000)),
+			Burst:     config.Get("server", "rate_limit", "burst").Int(2000),
+			Period:    time.Second,
+			Algorithm: ratelimit.TokenBucket,
+		},
+		StorageBackend: ratelimit.LocalStorage,
+		LocalConfig: &ratelimit.LocalConfig{
+			MaxKeys:         config.Get("server", "rate_limit", "max_keys").Int(10000),
+			CleanupInterval: 5 * time.Minute,
+		},
+		CleanupInterval: 5 * time.Minute,
+		MetricsEnabled:  true,
+		DynamicLimits:   config.Get("server", "rate_limit", "dynamic").Bool(),
+	}
+
+	limiter, err := ratelimit.NewTokenBucket(rateLimitConfig)
+	if err != nil {
+		zzlog.Errorw("failed to initialize rate limiter", zap.Error(err))
+		return
+	}
+
+	s.rateLimiter = limiter
+	zzlog.Infow("rate limiter initialized",
+		zap.Float64("rate", rateLimitConfig.DefaultLimit.Rate),
+		zap.Int("burst", rateLimitConfig.DefaultLimit.Burst))
+}
+
+// initCircuitBreaker initializes the circuit breaker for the server
+func (s *Server) initCircuitBreaker() {
+	cbConfig := circuitbreaker.Config{
+		Name:                config.Get("server", "name").String("") + "-circuit-breaker",
+		ErrorThreshold:      config.Get("server", "circuit_breaker", "error_threshold").Float64(0.5),
+		RequestThreshold:    config.Get("server", "circuit_breaker", "request_threshold").Int64(20),
+		SleepWindow:         time.Duration(config.Get("server", "circuit_breaker", "sleep_window").Int(5)) * time.Second,
+		HalfOpenMaxRequests: config.Get("server", "circuit_breaker", "half_open_max_requests").Int64(5),
+		Timeout:             time.Duration(config.Get("server", "circuit_breaker", "timeout").Int(30)) * time.Second,
+		RollingWindow:       time.Duration(config.Get("server", "circuit_breaker", "rolling_window").Int(10)) * time.Second,
+		BucketCount:         config.Get("server", "circuit_breaker", "bucket_count").Int(10),
+		FailurePredicate:    circuitbreaker.DefaultFailurePredicate,
+		OnStateChange: func(from, to circuitbreaker.State) {
+			zzlog.Warnw("circuit breaker state changed",
+				zap.String("from", from.String()),
+				zap.String("to", to.String()))
+		},
+		MetricsEnabled: true,
+	}
+
+	cb, err := circuitbreaker.NewCircuitBreaker(cbConfig)
+	if err != nil {
+		zzlog.Errorw("failed to initialize circuit breaker", zap.Error(err))
+		return
+	}
+
+	s.circuitBreaker = cb
+	zzlog.Infow("circuit breaker initialized",
+		zap.String("name", cbConfig.Name),
+		zap.Float64("error_threshold", cbConfig.ErrorThreshold))
+}
+
+// initRateLimitManager initializes the rate limit manager
+func (s *Server) initRateLimitManager() {
+	mgrConfig := &ratelimit.ManagerConfig{
+		DefaultRateLimit: ratelimit.Limit{
+			Rate:      float64(config.Get("server", "rate_limit", "global").Int(1000)),
+			Burst:     config.Get("server", "rate_limit", "burst").Int(2000),
+			Period:    time.Second,
+			Algorithm: ratelimit.TokenBucket,
+		},
+		DefaultCircuitBreaker: circuitbreaker.DefaultConfig("default"),
+		StorageBackend:        ratelimit.LocalStorage,
+		LocalConfig: &ratelimit.LocalConfig{
+			MaxKeys:         config.Get("server", "rate_limit", "max_keys").Int(10000),
+			CleanupInterval: 5 * time.Minute,
+		},
+		CleanupInterval:    5 * time.Minute,
+		MetricsEnabled:     true,
+		DynamicLimits:      config.Get("server", "rate_limit", "dynamic").Bool(),
+		MaxLimiters:        config.Get("server", "rate_limit", "max_limiters").Int(1000),
+		MaxCircuitBreakers: config.Get("server", "circuit_breaker", "max_circuit_breakers").Int(1000),
+	}
+
+	mgr, err := ratelimit.NewManager(mgrConfig)
+	if err != nil {
+		zzlog.Errorw("failed to initialize rate limit manager", zap.Error(err))
+		return
+	}
+
+	s.rateLimitMgr = mgr
+	zzlog.Info("rate limit manager initialized")
+}
+
+// collectMetrics collects metrics for rate limiting and circuit breaking
+func (s *Server) collectMetrics() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			if s.rateLimitMgr != nil {
+				metrics := s.rateLimitMgr.GetMetrics()
+				// Report metrics to monitoring system
+				zzlog.Debugw("rate limit manager metrics",
+					zap.Int64("rate_limit_allowed", metrics.RateLimitAllowed),
+					zap.Int64("rate_limit_denied", metrics.RateLimitDenied),
+					zap.Int64("circuit_breaker_requests", metrics.CircuitBreakerRequests),
+					zap.Int64("circuit_breaker_success", metrics.CircuitBreakerSuccess),
+					zap.Int64("circuit_breaker_failures", metrics.CircuitBreakerFailures),
+					zap.Int64("circuit_breaker_rejected", metrics.CircuitBreakerRejected))
+			}
+		}
+	}
+}
+
+// SetRateLimit sets or updates the rate limit for a specific method
+func (s *Server) SetRateLimit(method string, limit ratelimit.Limit) error {
+	if s.rateLimitMgr == nil {
+		return fmt.Errorf("rate limit manager not initialized")
+	}
+
+	serviceName := config.Get("server", "name").String("")
+	return s.rateLimitMgr.SetRateLimit(context.Background(), serviceName, method, limit)
+}
+
+// SetCircuitBreaker sets or updates the circuit breaker for a specific method
+func (s *Server) SetCircuitBreaker(method string, cbConfig circuitbreaker.Config) error {
+	if s.rateLimitMgr == nil {
+		return fmt.Errorf("rate limit manager not initialized")
+	}
+
+	serviceName := config.Get("server", "name").String("")
+	return s.rateLimitMgr.SetCircuitBreaker(serviceName, method, cbConfig)
 }
