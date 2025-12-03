@@ -584,22 +584,22 @@ func (s *Server) collectMetrics() {
 			return
 		case <-ticker.C:
 			if s.rateLimitMgr != nil {
-				metrics := s.rateLimitMgr.GetMetrics()
+				limitMetric := s.rateLimitMgr.GetMetrics()
 				// Report metrics to monitoring system
 				zzlog.Debugw("rate limit manager metrics",
-					zap.Int64("rate_limit_allowed", metrics.RateLimitAllowed),
-					zap.Int64("rate_limit_denied", metrics.RateLimitDenied),
-					zap.Int64("circuit_breaker_requests", metrics.CircuitBreakerRequests),
-					zap.Int64("circuit_breaker_success", metrics.CircuitBreakerSuccess),
-					zap.Int64("circuit_breaker_failures", metrics.CircuitBreakerFailures),
-					zap.Int64("circuit_breaker_rejected", metrics.CircuitBreakerRejected))
+					zap.Int64("rate_limit_allowed", limitMetric.RateLimitAllowed),
+					zap.Int64("rate_limit_denied", limitMetric.RateLimitDenied),
+					zap.Int64("circuit_breaker_requests", limitMetric.CircuitBreakerRequests),
+					zap.Int64("circuit_breaker_success", limitMetric.CircuitBreakerSuccess),
+					zap.Int64("circuit_breaker_failures", limitMetric.CircuitBreakerFailures),
+					zap.Int64("circuit_breaker_rejected", limitMetric.CircuitBreakerRejected))
 
-				metrics.CounterByAdd("server", "rate_limit_allowed", metrics.RateLimitAllowed)
-				metrics.CounterByAdd("server", "rate_limit_denied", metrics.RateLimitDenied)
-				metrics.CounterByAdd("server", "circuit_breaker_requests", metrics.CircuitBreakerRequests)
-				metrics.CounterByAdd("server", "circuit_breaker_success", metrics.CircuitBreakerSuccess)
-				metrics.CounterByAdd("server", "circuit_breaker_failures", metrics.CircuitBreakerFailures)
-				metrics.CounterByAdd("server", "circuit_breaker_rejected", metrics.CircuitBreakerRejected)
+				metrics.CounterByAdd("server", "rate_limit_allowed", limitMetric.RateLimitAllowed)
+				metrics.CounterByAdd("server", "rate_limit_denied", limitMetric.RateLimitDenied)
+				metrics.CounterByAdd("server", "circuit_breaker_requests", limitMetric.CircuitBreakerRequests)
+				metrics.CounterByAdd("server", "circuit_breaker_success", limitMetric.CircuitBreakerSuccess)
+				metrics.CounterByAdd("server", "circuit_breaker_failures", limitMetric.CircuitBreakerFailures)
+				metrics.CounterByAdd("server", "circuit_breaker_rejected", limitMetric.CircuitBreakerRejected)
 			}
 		}
 	}
