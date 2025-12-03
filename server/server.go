@@ -575,7 +575,7 @@ func (s *Server) initRateLimitManager() {
 
 // collectMetrics collects metrics for rate limiting and circuit breaking
 func (s *Server) collectMetrics() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	for {
