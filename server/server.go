@@ -593,6 +593,13 @@ func (s *Server) collectMetrics() {
 					zap.Int64("circuit_breaker_success", metrics.CircuitBreakerSuccess),
 					zap.Int64("circuit_breaker_failures", metrics.CircuitBreakerFailures),
 					zap.Int64("circuit_breaker_rejected", metrics.CircuitBreakerRejected))
+
+				metrics.CounterByAdd("server", "rate_limit_allowed", metrics.rate_limit_allowed)
+				metrics.CounterByAdd("server", "rate_limit_denied", metrics.rate_limit_denied)
+				metrics.CounterByAdd("server", "circuit_breaker_requests", metrics.circuit_breaker_requests)
+				metrics.CounterByAdd("server", "circuit_breaker_success", metrics.circuit_breaker_success)
+				metrics.CounterByAdd("server", "circuit_breaker_failures", metrics.circuit_breaker_failures)
+				metrics.CounterByAdd("server", "circuit_breaker_rejected", metrics.circuit_breaker_rejected)
 			}
 		}
 	}
