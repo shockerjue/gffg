@@ -14,8 +14,8 @@ import (
 
 var (
 	Host    = ""
-	MaxCh   = 10000
-	MaxPush = 1000
+	MaxCh   = 100000
+	MaxPush = 2000
 
 	// Internal metrics for monitoring the metrics system itself
 	metricsDropped = &counter{}
@@ -177,7 +177,6 @@ func (m *metrics) report(it *proto.Metrics) {
 			zap.Any("cost", time.Now().UnixMilli()-startAt), zap.Any("mCh", len(m.mCh)),
 			zap.Int("batch_size", len(it.Lists)))
 	}
-	return
 }
 
 func (m *metrics) to(it *proto.Metric) {
