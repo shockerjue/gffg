@@ -120,6 +120,11 @@ func (m *metrics) loop() {
 		select {
 		case it := <-m.mCh:
 			lists = append(lists, it)
+			if len(lists) == batchSize {
+				m.combine(lists)
+
+				lists = lists[:0]
+			}
 
 		case <-timer.C:
 			// Timer expired, process any collected metrics
