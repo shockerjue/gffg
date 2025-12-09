@@ -111,38 +111,25 @@ func (m *metrics) combine(its []*proto.Metric) {
 
 func (m *metrics) loop() {
 	timer := time.NewTicker(200 * time.Millisecond)
-	batchSize := 1000 // Pre-allocate reasonable batch size
+	batchSize := MaxPush // Pre-allocate reasonable batch size
 
+	lists := make([]*proto.Metric, 0, batchSize)
 	for {
-		lists := make([]*proto.Metric, 0, batchSize)
 
 		// Wait for first metric or timer
 		select {
 		case it := <-m.mCh:
 			lists = append(lists, it)
 
-			// Try to collect more metrics without blocking
-			for len(lists) < batchSize {
-				select {
-				case it := <-m.mCh:
-					lists = append(lists, it)
-				default:
-					// No more metrics available
-					goto process
-				}
-			}
-
 		case <-timer.C:
 			// Timer expired, process any collected metrics
-		}
+			if len(lists) > 0 {
+				m.combine(lists)
 
-	process:
-		if len(lists) > 0 {
-			m.combine(lists)
-		}
+				lists = lists[:0]
+			}
 
-		// Reset timer for next batch
-		<-timer.C
+		}
 	}
 }
 
